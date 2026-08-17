@@ -4,6 +4,8 @@ import requests
 import time
 import threading
 import os
+import zipfile
+import io
 from flask import Flask
 
 # ==========================================
@@ -79,20 +81,21 @@ def process_single_cookie(chat_id, msg_id, cookie_text):
     except Exception as e:
         bot.edit_message_text("🚨 *System Error:* Could not connect to API.", chat_id=chat_id, message_id=msg_id, parse_mode="Markdown")
 
-# ---------- Single cookie handler ----------
+# ---------- Single cookie via text ----------
 @bot.message_handler(commands=['start', 'help'])
 def send_welcome(message):
     welcome_text = (
         "🤖 *Welcome to the Checker Bot!*\n\n"
-        "Simply paste your Netflix cookie (JSON or Netscape format) "
-        "directly into this chat, and I will check it for you.\n\n"
-        "📎 You can also send a `.txt` file containing multiple cookies "
-        "(one per line) and I will check all of them."
+        "📌 *How to use:*\n"
+        "• Paste a single cookie (JSON or Netscape) as text.\n"
+        "• Send a `.txt` file – the *entire file* will be treated as one cookie.\n"
+        "• Send a `.zip` file containing multiple `.txt` files – each file will be checked separately.\n\n"
+        "⚠️ *Note:* Each `.txt` file should contain a complete Netscape cookie session (like the examples you provided)."
     )
     bot.send_message(message.chat.id, welcome_text, parse_mode="Markdown")
 
 @bot.message_handler(func=lambda message: True, content_types=['text'])
-def check_cookie(message):
+def check_cookie_text(message):
     raw_text = message.text.strip()
     if "netflix" not in raw_text.lower() and "NetflixId" not in raw_text and "{" not in raw_text:
         bot.reply_to(message, "❌ Please send a valid cookie string.")
@@ -101,48 +104,61 @@ def check_cookie(message):
     status_msg = bot.reply_to(message, "⏳ *Checking cookie...*", parse_mode="Markdown")
     process_single_cookie(message.chat.id, status_msg.message_id, raw_text)
 
-# ---------- File handler (multiple cookies) ----------
+# ---------- File handler (.txt or .zip) ----------
 @bot.message_handler(content_types=['document'])
 def handle_document(message):
     file_info = bot.get_file(message.document.file_id)
-    if not message.document.file_name.endswith('.txt'):
-        bot.reply_to(message, "❌ Please send a `.txt` file with one cookie per line.")
-        return
+    file_name = message.document.file_name.lower()
 
-    downloaded_file = bot.download_file(file_info.file_path)
-    file_content = downloaded_file.decode('utf-8', errors='ignore')
-    lines = [line.strip() for line in file_content.splitlines() if line.strip()]
+    if file_name.endswith('.txt'):
+        # Single text file → treat whole content as one cookie
+        downloaded = bot.download_file(file_info.file_path)
+        cookie_text = downloaded.decode('utf-8', errors='ignore').strip()
+        if not cookie_text:
+            bot.reply_to(message, "⚠️ The file is empty.")
+            return
+        status_msg = bot.reply_to(message, "⏳ *Checking cookie from file...*", parse_mode="Markdown")
+        process_single_cookie(message.chat.id, status_msg.message_id, cookie_text)
 
-    if not lines:
-        bot.reply_to(message, "⚠️ The file is empty or contains no valid cookies.")
-        return
+    elif file_name.endswith('.zip'):
+        # ZIP file → extract all .txt files and check each
+        downloaded = bot.download_file(file_info.file_path)
+        try:
+            with zipfile.ZipFile(io.BytesIO(downloaded)) as zf:
+                txt_files = [f for f in zf.namelist() if f.lower().endswith('.txt')]
+                if not txt_files:
+                    bot.reply_to(message, "⚠️ No `.txt` files found inside the ZIP.")
+                    return
+                
+                start_msg = bot.reply_to(message, f"📂 *Processing {len(txt_files)} cookies from ZIP...*", parse_mode="Markdown")
+                for idx, filename in enumerate(txt_files, 1):
+                    with zf.open(filename) as f:
+                        content = f.read().decode('utf-8', errors='ignore').strip()
+                        if not content:
+                            continue
+                        temp_msg = bot.send_message(message.chat.id, f"⏳ Checking #{idx}: `{filename}`...", parse_mode="Markdown")
+                        process_single_cookie(message.chat.id, temp_msg.message_id, content)
+                        time.sleep(1)  # delay to avoid rate limit
+                bot.send_message(message.chat.id, f"✅ *Finished checking all {len(txt_files)} files from ZIP.*", parse_mode="Markdown")
+        except Exception as e:
+            bot.reply_to(message, f"❌ Failed to extract ZIP: {str(e)}")
+    else:
+        bot.reply_to(message, "❌ Please send a `.txt` or `.zip` file.")
 
-    start_msg = bot.reply_to(message, f"📂 *Processing {len(lines)} cookies...*", parse_mode="Markdown")
-
-    for idx, cookie in enumerate(lines, 1):
-        temp_msg = bot.send_message(message.chat.id, f"⏳ Checking cookie #{idx}...")
-        process_single_cookie(message.chat.id, temp_msg.message_id, cookie)
-        time.sleep(1)  # delay to avoid rate limit
-
-    bot.send_message(message.chat.id, f"✅ *Finished checking all {len(lines)} cookies.*", parse_mode="Markdown")
-
-# ---------- Flask route for health check ----------
+# ---------- Flask health check ----------
 @app.route('/')
 def health_check():
     return "OK", 200
 
-# ---------- Function to start bot polling in background ----------
+# ---------- Start bot in background ----------
 def start_bot():
     print("🤖 Bot is starting...")
     bot.infinity_polling()
 
-# ---------- Main entry point ----------
 if __name__ == "__main__":
-    # Run bot in a separate thread so Flask can serve the web server
     bot_thread = threading.Thread(target=start_bot)
     bot_thread.daemon = True
     bot_thread.start()
 
-    # Start Flask web server (Render expects a web server)
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
