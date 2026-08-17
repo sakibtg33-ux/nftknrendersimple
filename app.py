@@ -9,8 +9,8 @@ from flask import Flask
 # ==========================================
 # 🔧 CONFIGURATION - Environment Variables
 # ==========================================
-TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "7631016620:AAHcPgdcI79NeYQxsJbk_NGlbyy__cPIuwU")
-NFTOKEN_API_KEY = os.environ.get("NFTOKEN_API_KEY", "NFK_fe13eda486c4ca64a95763e4")
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "PUT_YOUR_TOKEN_HERE")
+NFTOKEN_API_KEY = os.environ.get("NFTOKEN_API_KEY", "PUT_YOUR_API_KEY_HERE")
 API_URL = "https://nftoken.site/v1/api.php"
 # ==========================================
 
